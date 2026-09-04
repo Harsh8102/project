@@ -59,7 +59,7 @@ function matchesKnownLane(description: string, lanes: CanonicalLane[]): boolean 
 export async function extractRatesForDocument(
   source: RateDocumentSource,
   lanes: CanonicalLane[],
-  options: { batchSize?: number } = {}
+  options: { batchSize?: number; onProgress?: (chunksDone: number, chunksTotal: number) => void } = {}
 ): Promise<RateExtractionOutcome> {
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const canChunk = source.kind === "xlsx" && lanes.length > CHUNK_THRESHOLD;
@@ -81,6 +81,7 @@ export async function extractRatesForDocument(
 
     const result = await extractRatesChunk(chunkDocument, targetLanes);
     chunksRun++;
+    options.onProgress?.(chunksRun, batches.length);
 
     if (result.documentStructure === "region_matrix") {
       documentStructure = "region_matrix";

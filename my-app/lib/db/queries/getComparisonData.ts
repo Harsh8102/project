@@ -14,6 +14,8 @@ import { DecisionRecordModel } from "../models/DecisionRecord";
 import { computeLandedCost, type ChargeFieldRow, type LandedCostResult } from "../../scoring/computeLandedCost";
 import { computeRateCompetitiveness, type LandedCostGrid } from "../../scoring/rateCompetitiveness";
 import { computeVendorScore, type VendorScoreResult } from "../../scoring/computeScores";
+import { getRegionForState, type Region } from "../../normalization/regions";
+import { resolveCostAssumptions, type ResolvedCostAssumptions } from "../../scoring/costAssumptions";
 
 const SECONDS_PER_MANUAL_FIELD = 90;
 
@@ -38,8 +40,10 @@ export type LaneSummary = {
   laneIndex: number;
   originCity: string;
   originState: string;
+  originRegion: Region;
   destCity: string;
   destState: string;
+  destRegion: Region;
   weightBand: string;
   expectedVolumeKgPerMonth: number;
 };
@@ -84,6 +88,7 @@ export type ComparisonData = {
   lanes: LaneSummary[];
   vendors: VendorSummary[];
   landedCosts: LandedCostGrid; // vendorId -> laneId -> LandedCostResult
+  costAssumptionsByLaneId: Map<string, ResolvedCostAssumptions>;
   unsolicitedLanes: UnsolicitedLane[];
   questionnaireScores: Map<string, ReturnType<typeof computeVendorScore>["questionnaire"]>;
   termsScores: Map<string, ReturnType<typeof computeVendorScore>["terms"]>;
@@ -116,12 +121,30 @@ export async function getComparisonData(rfxId: string): Promise<ComparisonData> 
     laneIndex: l.laneIndex,
     originCity: l.originCity,
     originState: l.originState,
+    originRegion: getRegionForState(l.originState),
     destCity: l.destCity,
     destState: l.destState,
+    destRegion: getRegionForState(l.destState),
     weightBand: l.weightBand,
     expectedVolumeKgPerMonth: l.expectedVolumeKgPerMonth,
   }));
   const laneById = new Map(lanes.map((l) => [l.id, l]));
+
+  // Resolved once per lane (not per vendor) — every vendor on a lane shares
+  // the same reference weight/unit-count/invoice-value assumptions. See
+  // lib/scoring/costAssumptions.ts for the lane-override > RFx-default >
+  // band-midpoint precedence.
+  const costAssumptionsByLaneId = new Map<string, ResolvedCostAssumptions>();
+  for (const l of laneDocs) {
+    costAssumptionsByLaneId.set(
+      String(l._id),
+      resolveCostAssumptions({
+        weightBand: l.weightBand,
+        laneOverrides: l.costAssumptionOverrides,
+        rfxDefaults: rfx.costAssumptionDefaults,
+      })
+    );
+  }
 
   const vendors: VendorSummary[] = vendorDocs.map((v) => ({ id: String(v._id), code: v.code, name: v.name }));
   const vendorById = new Map(vendors.map((v) => [v.id, v]));
@@ -164,7 +187,7 @@ export async function getComparisonData(rfxId: string): Promise<ComparisonData> 
         flagNote: r.flagNote,
         sourceSnippet: r.sourceSnippet,
       }));
-      resultByLane.set(lane.id, computeLandedCost(chargeRows, lane.weightBand));
+      resultByLane.set(lane.id, computeLandedCost(chargeRows, costAssumptionsByLaneId.get(lane.id)!));
     }
     landedCosts.set(vendor.id, resultByLane);
   }
@@ -249,6 +272,7 @@ export async function getComparisonData(rfxId: string): Promise<ComparisonData> 
     lanes,
     vendors,
     landedCosts,
+    costAssumptionsByLaneId,
     unsolicitedLanes,
     questionnaireScores,
     termsScores,

@@ -1,13 +1,19 @@
 // Resolves a vendor's charge line items for one lane into a single
 // comparable landed-cost total, in code — never guessed by the LLM (§7 trust
 // rule). normalizeCharge.ts deliberately stops at "value + basis"; this is
-// the next deterministic step: turning a basis into an actual INR number for
-// a reference shipment, and being honest about the charges it can't safely
-// resolve rather than guessing a unit count or invoice value that was never
-// given (see aerchain-implementation-plan.md §5.3 for the product decision).
+// the next deterministic step: turning a basis into an actual INR number.
+//
+// per_unit and pct_of_invoice_value need a reference (unit count, invoice
+// value) that no vendor document provides — these resolve ONLY when the
+// caller supplies a real assumption (lib/scoring/costAssumptions.ts;
+// buyer-set, always labeled, never silently invented — see
+// docs/charge-normalization-unit-economics.md and
+// aerchain-implementation-plan.md §5.3). Absent that, they stay excluded,
+// exactly as before this was possible at all.
 
 import type { FlagType } from "../db/models/ExtractedField";
 import { getTaxonomyEntry } from "../normalization/chargeTaxonomy";
+import type { AssumptionSource, ResolvedCostAssumptions } from "./costAssumptions";
 
 export type ChargeFieldRow = {
   fieldKey: string | null;
@@ -31,6 +37,11 @@ export type LandedCostLineItem = {
   flagType: FlagType | null;
   flagNote: string | null;
   sourceSnippet: ChargeFieldRow["sourceSnippet"];
+  // Which assumption (if any) this line item's resolved value depends on —
+  // null for a charge resolved purely from the vendor's own flat number.
+  // "band_midpoint" and "lane_override"/"rfx_default" are distinguished so
+  // the UI can show "this is today's existing default" vs. "you set this."
+  assumptionSource: AssumptionSource | null;
 };
 
 export type LandedCostStatus = "resolved" | "partial" | "not_quoted" | "unreadable";
@@ -66,7 +77,7 @@ function resolveFlatOrPerKg(value: number, basis: string | null, referenceWeight
   return null;
 }
 
-export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): LandedCostResult {
+export function computeLandedCost(rows: ChargeFieldRow[], assumptions: ResolvedCostAssumptions): LandedCostResult {
   if (rows.length === 0) {
     return { totalInr: null, isPartial: false, status: "not_quoted", excludedReasons: [], lineItems: [] };
   }
@@ -79,7 +90,8 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
   }
 
   const bundledRows = rows.filter((r) => r.flagType === "bundled_all_in");
-  const referenceWeightKg = parseWeightBandMidpointKg(weightBand);
+  const referenceWeightKg = assumptions.referenceWeightKg.value;
+  const weightSource = assumptions.referenceWeightKg.source;
 
   if (bundledRows.length > 0) {
     // Bundled still means "one line item covers everything" — it does NOT
@@ -108,6 +120,7 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
           flagType: r.flagType,
           flagNote: r.flagNote,
           sourceSnippet: r.sourceSnippet,
+          assumptionSource: null,
         });
         continue;
       }
@@ -126,6 +139,7 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
           flagType: r.flagType,
           flagNote: r.flagNote,
           sourceSnippet: r.sourceSnippet,
+          assumptionSource: null,
         });
         continue;
       }
@@ -143,6 +157,7 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
         flagType: r.flagType,
         flagNote: r.flagNote,
         sourceSnippet: r.sourceSnippet,
+        assumptionSource: PER_KG_BASES.has(r.basis ?? "") ? weightSource : null,
       });
     }
 
@@ -165,12 +180,21 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
     };
   }
 
-  // Resolve freight_charge first — pct_of_freight charges need it.
+  // Resolve freight_charge first — pct_of_freight charges need it, and (if
+  // freight itself is weight-dependent) inherit its assumption source too,
+  // since a fuel surcharge on a per_kg freight is indirectly weight-driven.
   const freightRow = rows.find((r) => r.fieldKey === "freight_charge");
   const freightResolvedInr =
     freightRow && freightRow.normalizedValue !== null && !freightRow.flagType
       ? resolveFlatOrPerKg(freightRow.normalizedValue, freightRow.basis, referenceWeightKg)
       : null;
+  const freightAssumptionSource: AssumptionSource | null =
+    freightRow && PER_KG_BASES.has(freightRow.basis ?? "") ? weightSource : null;
+
+  const unitCount = assumptions.unitCount.value;
+  const unitCountSource = assumptions.unitCount.source;
+  const invoiceValueInr = assumptions.referenceInvoiceValueInr.value;
+  const invoiceValueSource = assumptions.referenceInvoiceValueInr.source;
 
   const lineItems: LandedCostLineItem[] = [];
   const excludedReasons: string[] = [];
@@ -179,7 +203,7 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
 
   for (const row of rows) {
     const label = labelFor(row.fieldKey, row.rawHeaderLabel);
-    const base: Omit<LandedCostLineItem, "included" | "exclusionReason" | "resolvedValueInr"> = {
+    const base: Omit<LandedCostLineItem, "included" | "exclusionReason" | "resolvedValueInr" | "assumptionSource"> = {
       fieldKey: row.fieldKey,
       label,
       basis: row.basis,
@@ -191,7 +215,12 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
 
     const exclude = (reason: string) => {
       excludedReasons.push(`${label}: ${reason}`);
-      lineItems.push({ ...base, resolvedValueInr: null, included: false, exclusionReason: reason });
+      lineItems.push({ ...base, resolvedValueInr: null, included: false, exclusionReason: reason, assumptionSource: null });
+    };
+    const include = (resolvedValueInr: number, assumptionSource: AssumptionSource | null) => {
+      anyIncluded = true;
+      totalInr += resolvedValueInr;
+      lineItems.push({ ...base, resolvedValueInr, included: true, exclusionReason: null, assumptionSource });
     };
 
     if (row.normalizedValue === null) {
@@ -210,12 +239,20 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
       exclude(`Unusual pricing basis "${row.basis}" for this charge — needs manual review`);
       continue;
     }
-    if (row.fieldKey === "fov_liability") {
-      exclude("Priced as % of invoice value — no invoice value in this comparison");
+    if (row.fieldKey === "fov_liability" && row.basis === "pct_of_invoice_value") {
+      if (invoiceValueInr === null) {
+        exclude("Priced as % of invoice value — no invoice value assumption set for this RFx/lane");
+      } else {
+        include((row.normalizedValue / 100) * invoiceValueInr, invoiceValueSource);
+      }
       continue;
     }
     if (row.basis === "per_unit") {
-      exclude("Priced per unit — unit definition varies by vendor, not safely comparable");
+      if (unitCount === null) {
+        exclude("Priced per unit — no unit-count assumption set for this RFx/lane (needs a weight and an avg weight/unit)");
+      } else {
+        include(row.normalizedValue * unitCount, unitCountSource);
+      }
       continue;
     }
     if (row.basis === "slab_on_weight") {
@@ -223,29 +260,23 @@ export function computeLandedCost(rows: ChargeFieldRow[], weightBand: string): L
       continue;
     }
 
-    let resolvedValueInr: number | null = null;
     if (FLAT_BASES.has(row.basis ?? "")) {
-      resolvedValueInr = row.normalizedValue;
+      include(row.normalizedValue, null);
     } else if (PER_KG_BASES.has(row.basis ?? "")) {
       if (referenceWeightKg === null) {
         exclude("Priced per kg but the lane's weight band couldn't be parsed");
-        continue;
+      } else {
+        include(row.normalizedValue * referenceWeightKg, weightSource);
       }
-      resolvedValueInr = row.normalizedValue * referenceWeightKg;
     } else if (row.basis === "pct_of_freight") {
       if (freightResolvedInr === null) {
         exclude("Priced as % of freight, but no freight charge was resolved for this lane");
-        continue;
+      } else {
+        include((row.normalizedValue / 100) * freightResolvedInr, freightAssumptionSource);
       }
-      resolvedValueInr = (row.normalizedValue / 100) * freightResolvedInr;
     } else {
       exclude(`Unrecognized pricing basis "${row.basis}"`);
-      continue;
     }
-
-    anyIncluded = true;
-    totalInr += resolvedValueInr;
-    lineItems.push({ ...base, resolvedValueInr, included: true, exclusionReason: null });
   }
 
   if (!anyIncluded) {

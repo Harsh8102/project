@@ -7,6 +7,7 @@ import {
   type Content,
   type FunctionDeclaration,
 } from "@google/genai";
+import type { RequestTimer } from "@/lib/timing";
 
 let client: GoogleGenAI | null = null;
 
@@ -128,6 +129,11 @@ export async function runAgentTurn(params: {
   history: ChatTurn[]; // includes the new user message as the last entry
   executeTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
   maxToolRounds?: number;
+  // Optional — when passed, marks each Gemini round-trip and tool-execution
+  // batch individually (labels prefixed `gemini:`/`tools:`), so a caller can
+  // see the breakdown *inside* this loop rather than one opaque total. See
+  // docs/chat-response-time-investigation.md for what this found.
+  timer?: RequestTimer;
 }): Promise<{ text: string; toolCalls: ToolCallRecord[] }> {
   const ai = getGeminiClient();
   const maxRounds = params.maxToolRounds ?? 5;
@@ -156,6 +162,7 @@ export async function runAgentTurn(params: {
         },
       })
     );
+    params.timer?.mark(`gemini:round${round}`);
 
     const calls = response.functionCalls;
     if (!calls || calls.length === 0) {
@@ -177,6 +184,22 @@ export async function runAgentTurn(params: {
       toolCalls.push({ name, args, result });
       responseParts.push(createPartFromFunctionResponse(call.id ?? name, name, result));
     }
+    params.timer?.mark(`tools:round${round} (${calls.map((c) => c.name).join(",")})`);
+
+    // A single tool call whose own result already IS the complete answer
+    // (a ToolResult.finalAnswer — see lib/ai/chat/tools.ts) skips the next
+    // Gemini round-trip entirely: there's nothing left for the model to
+    // decide or phrase, so paying for another ~15-25s call just to have it
+    // restate a deterministic fact is pure waste. Only fires for exactly one
+    // tool call this round — a multi-call round means the model was also
+    // after other data, so it still needs to see all of it and respond.
+    if (calls.length === 1) {
+      const onlyResult = toolCalls[toolCalls.length - 1].result;
+      if (typeof onlyResult.finalAnswer === "string") {
+        return { text: onlyResult.finalAnswer, toolCalls };
+      }
+    }
+
     contents.push(createUserContent(responseParts));
   }
 

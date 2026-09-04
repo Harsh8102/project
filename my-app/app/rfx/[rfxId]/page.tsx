@@ -3,8 +3,8 @@ import { getLatestRfxOverview } from "@/lib/db/queries/getRfxOverview";
 import { getComparisonData } from "@/lib/db/queries/getComparisonData";
 import { getChatHistory } from "@/lib/db/queries/getChatHistory";
 import { Badge } from "@/components/ui/badge";
+import { RfxWorkspaceShell } from "@/components/RfxWorkspaceShell";
 import { ComparisonTabs } from "@/components/comparison/ComparisonTabs";
-import { ChatPanel } from "@/components/chat/ChatPanel";
 
 function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
   return Object.fromEntries(m);
@@ -23,8 +23,8 @@ export default async function RfxOverviewPage() {
   const [comparison, chatHistory] = await Promise.all([getComparisonData(rfx.id), getChatHistory(rfx.id)]);
 
   return (
-    <div className="mx-auto max-w-[1600px] space-y-6 p-8">
-      <div className="flex items-start justify-between">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+      <div className="flex shrink-0 items-start justify-between border-b border-border px-6 py-4 md:px-8">
         <div>
           <h1 className="text-2xl font-semibold">{rfx.title}</h1>
           <p className="text-sm text-muted-foreground">
@@ -34,22 +34,20 @@ export default async function RfxOverviewPage() {
         <Badge className="capitalize">{rfx.status}</Badge>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
+      <RfxWorkspaceShell rfxId={rfx.id} chatHistory={chatHistory}>
         <ComparisonTabs
           overview={rfx}
           lanes={comparison.lanes}
           vendors={comparison.vendors}
           landedCosts={nestedMapToRecord(comparison.landedCosts)}
+          costAssumptionsByLaneId={mapToRecord(comparison.costAssumptionsByLaneId)}
           unsolicitedLanes={comparison.unsolicitedLanes}
           questionnaireScores={mapToRecord(comparison.questionnaireScores)}
           termsScores={mapToRecord(comparison.termsScores)}
           vendorScores={mapToRecord(comparison.vendorScores)}
-          reviewQueue={comparison.reviewQueue}
-          timeSaved={comparison.timeSaved}
           decisions={comparison.decisions}
         />
-        <ChatPanel rfxId={rfx.id} initialMessages={chatHistory} />
-      </div>
+      </RfxWorkspaceShell>
     </div>
   );
 }

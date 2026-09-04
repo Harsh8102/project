@@ -40,7 +40,7 @@ function GenericTable({ rows }: { rows: Record<string, unknown>[] }) {
   const columns = Object.keys(rows[0]).filter((k) => k !== "vendorId" && k !== "laneId" && k !== "flagId");
 
   return (
-    <div className="max-h-64 overflow-y-auto rounded-md border">
+    <div className="max-h-64 min-w-0 max-w-full overflow-auto rounded-md border">
       <Table>
         <TableHeader>
           <TableRow>
@@ -97,7 +97,7 @@ export function ToolResultView({ trace }: { trace: ToolCallTrace }) {
   if (!rows) return null;
 
   return (
-    <div className="mt-2 space-y-1">
+    <div className="mt-2 min-w-0 max-w-full space-y-1">
       <p className="text-[11px] font-medium text-muted-foreground">{trace.name}</p>
       {result.displayHint === "chart" ? <BarChartView rows={rows} /> : <GenericTable rows={rows} />}
     </div>

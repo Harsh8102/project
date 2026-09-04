@@ -15,6 +15,11 @@ const ChatMessageSchema = new Schema(
     // lets a reloaded conversation re-render the same table/chart a live
     // turn would have shown, not just the prose. Null for "user" messages.
     toolCalls: { type: Schema.Types.Mixed, default: null },
+    // RequestTimer.toJSON() for this turn — {totalMs, marks[]}. Persisted
+    // (not just console-logged) so response-time evidence survives past the
+    // dev server's stdout, for demoing/reviewing later. Null for "user"
+    // messages and for a turn that errored before a timer snapshot existed.
+    timings: { type: Schema.Types.Mixed, default: null },
   },
   { timestamps: true }
 );

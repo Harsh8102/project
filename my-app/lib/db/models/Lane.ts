@@ -12,6 +12,17 @@ const LaneSchema = new Schema(
     destState: { type: String, required: true },
     expectedVolumeKgPerMonth: { type: Number, required: true },
     weightBand: { type: String, required: true },
+    // Per-lane overrides for the buyer's cost-comparison assumptions — set
+    // when analyzing THIS lane specifically (Lane Detail's sliders), so
+    // exploring one lane never silently changes another's numbers. Each
+    // field falls back to the RFx-wide default (Rfx.costAssumptionDefaults)
+    // when unset, and referenceWeightKg additionally falls back to this
+    // lane's own weightBand midpoint (the existing, already-live default).
+    costAssumptionOverrides: {
+      referenceWeightKg: { type: Number, default: null },
+      avgWeightPerUnitKg: { type: Number, default: null },
+      referenceInvoiceValueInr: { type: Number, default: null },
+    },
   },
   { timestamps: true }
 );

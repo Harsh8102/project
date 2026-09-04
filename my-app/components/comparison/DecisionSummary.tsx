@@ -60,13 +60,13 @@ export function DecisionSummary({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Vendor</TableHead>
-            <TableHead>Rate</TableHead>
-            <TableHead>Questionnaire</TableHead>
-            <TableHead>Terms</TableHead>
-            <TableHead>Overall</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead />
+            <TableHead className="sticky top-0 z-10 bg-muted">Vendor</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted">Rate</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted">Questionnaire</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted">Terms</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted">Overall</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted">Status</TableHead>
+            <TableHead className="sticky top-0 z-10 bg-muted" />
           </TableRow>
         </TableHeader>
         <TableBody>

@@ -5,6 +5,7 @@ import { VendorModel } from "../models/Vendor";
 import { VendorSubmissionModel, SUBMISSION_SECTIONS, type SubmissionSection } from "../models/VendorSubmission";
 
 export type SubmissionSummary = {
+  id: string;
   section: SubmissionSection;
   fileName: string;
   fileType: string;
@@ -48,6 +49,7 @@ export async function getLatestRfxOverview(): Promise<RfxOverview | null> {
     const vendorId = s.vendorId.toString();
     if (!submissionsByVendor.has(vendorId)) submissionsByVendor.set(vendorId, new Map());
     submissionsByVendor.get(vendorId)!.set(s.section as SubmissionSection, {
+      id: s._id.toString(),
       section: s.section as SubmissionSection,
       fileName: s.fileName,
       fileType: s.fileType,

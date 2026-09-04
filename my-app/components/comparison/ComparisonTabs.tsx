@@ -16,22 +16,22 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SUBMISSION_SECTIONS } from "@/lib/db/models/VendorSubmission";
+import { QUESTIONNAIRE_FIELDS } from "@/lib/fixtures/questionnaireFields";
+import { TERMS_FIELDS } from "@/lib/fixtures/termsFields";
 import type { RfxOverview, SubmissionSummary } from "@/lib/db/queries/getRfxOverview";
 import type {
   DecisionSummaryRecord,
   LaneSummary,
-  ReviewQueueItem,
-  TimeSavedStats,
   UnsolicitedLane,
   VendorSummary,
 } from "@/lib/db/queries/getComparisonData";
 import type { LandedCostResult } from "@/lib/scoring/computeLandedCost";
 import type { SectionScore, VendorScoreResult } from "@/lib/scoring/computeScores";
+import type { ResolvedCostAssumptions } from "@/lib/scoring/costAssumptions";
 import { ChargesGrid } from "./ChargesGrid";
 import { ScoreboardSection } from "./ScoreboardSection";
-import { ReviewQueue } from "./ReviewQueue";
 import { DecisionSummary } from "./DecisionSummary";
-import { TimeSavedPanel } from "./TimeSavedPanel";
+import { UploadTab } from "./UploadTab";
 
 function fileHref(blobUrl: string) {
   return `/api/files?url=${encodeURIComponent(blobUrl)}`;
@@ -53,7 +53,7 @@ function SubmissionCell({ submission }: { submission: SubmissionSummary }) {
         href={fileHref(submission.blobUrl)}
         target="_blank"
         rel="noreferrer"
-        className="text-sm font-medium text-blue-600 hover:underline"
+        className="text-sm font-medium text-primary hover:underline"
       >
         {submission.fileName}
       </a>
@@ -79,47 +79,43 @@ export function ComparisonTabs({
   lanes,
   vendors,
   landedCosts,
+  costAssumptionsByLaneId,
   unsolicitedLanes,
   questionnaireScores,
   termsScores,
   vendorScores,
-  reviewQueue,
-  timeSaved,
   decisions,
 }: {
   overview: RfxOverview;
   lanes: LaneSummary[];
   vendors: VendorSummary[];
   landedCosts: Record<string, Record<string, LandedCostResult>>;
+  costAssumptionsByLaneId: Record<string, ResolvedCostAssumptions>;
   unsolicitedLanes: UnsolicitedLane[];
   questionnaireScores: Record<string, SectionScore | null>;
   termsScores: Record<string, SectionScore | null>;
   vendorScores: Record<string, VendorScoreResult>;
-  reviewQueue: ReviewQueueItem[];
-  timeSaved: TimeSavedStats;
   decisions: DecisionSummaryRecord[];
 }) {
   return (
-    <Tabs defaultValue="charges">
-      <TabsList>
+    <Tabs defaultValue="charges" className="flex h-full min-h-0 flex-col">
+      <TabsList className="shrink-0">
         <TabsTrigger value="overview">Overview</TabsTrigger>
+        <TabsTrigger value="upload">Upload</TabsTrigger>
         <TabsTrigger value="charges">Charges</TabsTrigger>
         <TabsTrigger value="questionnaire">Questionnaire</TabsTrigger>
         <TabsTrigger value="terms">Terms</TabsTrigger>
-        <TabsTrigger value="review">
-          Review Queue{reviewQueue.length > 0 ? ` (${reviewQueue.length})` : ""}
-        </TabsTrigger>
         <TabsTrigger value="decision">Decision Summary</TabsTrigger>
       </TabsList>
 
-      <TabsContent value="overview" className="space-y-6 pt-4">
+      <TabsContent value="overview" className="min-h-0 flex-1 space-y-6 overflow-y-auto pt-4">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Buyer-side documents</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-4 text-sm">
             {overview.laneListBlobUrl && (
-              <a href={fileHref(overview.laneListBlobUrl)} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+              <a href={fileHref(overview.laneListBlobUrl)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                 Lane list ({overview.laneCount} lanes) ↓
               </a>
             )}
@@ -128,13 +124,13 @@ export function ComparisonTabs({
                 href={fileHref(overview.questionnaireTemplateBlobUrl)}
                 target="_blank"
                 rel="noreferrer"
-                className="text-blue-600 hover:underline"
+                className="text-primary hover:underline"
               >
                 Blank questionnaire template ↓
               </a>
             )}
             {overview.termsTemplateBlobUrl && (
-              <a href={fileHref(overview.termsTemplateBlobUrl)} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+              <a href={fileHref(overview.termsTemplateBlobUrl)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                 Blank terms template ↓
               </a>
             )}
@@ -174,24 +170,30 @@ export function ComparisonTabs({
         </div>
       </TabsContent>
 
-      <TabsContent value="charges" className="pt-4">
-        <ChargesGrid lanes={lanes} vendors={vendors} landedCosts={landedCosts} unsolicitedLanes={unsolicitedLanes} />
+      <TabsContent value="upload" className="min-h-0 flex-1 overflow-y-auto pt-4">
+        <UploadTab overview={overview} />
       </TabsContent>
 
-      <TabsContent value="questionnaire" className="pt-4">
-        <ScoreboardSection vendors={vendors} scores={questionnaireScores} />
+      <TabsContent value="charges" className="min-h-0 flex-1 overflow-hidden pt-4">
+        <ChargesGrid
+          lanes={lanes}
+          vendors={vendors}
+          landedCosts={landedCosts}
+          costAssumptionsByLaneId={costAssumptionsByLaneId}
+          unsolicitedLanes={unsolicitedLanes}
+          vendorScores={vendorScores}
+        />
       </TabsContent>
 
-      <TabsContent value="terms" className="pt-4">
-        <ScoreboardSection vendors={vendors} scores={termsScores} />
+      <TabsContent value="questionnaire" className="min-h-0 flex-1 overflow-hidden pt-4">
+        <ScoreboardSection vendors={vendors} scores={questionnaireScores} fields={QUESTIONNAIRE_FIELDS} sectionLabel="Questionnaire" />
       </TabsContent>
 
-      <TabsContent value="review" className="pt-4">
-        <ReviewQueue items={reviewQueue} vendors={vendors} />
+      <TabsContent value="terms" className="min-h-0 flex-1 overflow-hidden pt-4">
+        <ScoreboardSection vendors={vendors} scores={termsScores} fields={TERMS_FIELDS} sectionLabel="Terms" />
       </TabsContent>
 
-      <TabsContent value="decision" className="space-y-4 pt-4">
-        <TimeSavedPanel stats={timeSaved} />
+      <TabsContent value="decision" className="min-h-0 flex-1 overflow-y-auto pt-4">
         <DecisionSummary rfxId={overview.id} vendors={vendors} scores={vendorScores} decisions={decisions} />
       </TabsContent>
     </Tabs>

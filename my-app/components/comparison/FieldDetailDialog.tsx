@@ -64,7 +64,7 @@ export function FieldDetailDialog({
             <Badge variant={confidenceBadgeVariant(confidence)}>{Math.round(confidence * 100)}%</Badge>
           </div>
           {flagType && (
-            <div className="rounded-md bg-amber-50 p-2 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            <div className="rounded-md bg-warning-soft p-2 text-warning-foreground">
               <div className="font-medium capitalize">{flagType.replaceAll("_", " ")}</div>
               {flagNote && <div>{flagNote}</div>}
             </div>

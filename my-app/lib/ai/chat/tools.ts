@@ -10,11 +10,21 @@ import { Type, type Schema, type ToolDeclaration } from "../gemini";
 import type { ComparisonData } from "../../db/queries/getComparisonData";
 import { computeRateCompetitiveness, type LandedCostGrid } from "../../scoring/rateCompetitiveness";
 import { DEFAULT_WEIGHTS, type VendorScoreWeights, type VendorScoreResult } from "../../scoring/computeScores";
+import { rankUnitEconomics } from "../../scoring/unitEconomics";
 
 export type ToolResult = {
   summary: string;
   data: unknown;
   displayHint: "table" | "chart" | "none";
+  // Set only when a tool's own result is itself a complete, deterministic
+  // answer — nothing left to look up or phrase. runAgentTurn (lib/ai/gemini.ts)
+  // short-circuits and returns this text directly, skipping the next Gemini
+  // round-trip entirely, when a round made exactly one tool call and that
+  // tool set this. A tool sets it only when it can prove there's genuinely
+  // no more useful data to fetch — e.g. a fully-specified origin+destination
+  // lookup that matched zero lanes; a real "this doesn't exist" fact doesn't
+  // get more true by asking a model to say it in different words.
+  finalAnswer?: string;
 };
 
 function asString(v: unknown): string | null {
@@ -27,31 +37,128 @@ function asStringArray(v: unknown): string[] {
 
 // --- 1. filter_lanes ---
 
+type Lane = ComparisonData["lanes"][number];
+
+// A small, closed filter primitive — not arbitrary code, just a bounded set
+// of known fields and operators — so a question needing a combination we
+// didn't specifically build a named param for (region, a numeric range on
+// volume) still resolves to one real, deterministic tool call instead of
+// the model reconstructing the answer from raw fields with its own
+// ungrounded judgment. See docs/chat-response-time-investigation.md-style
+// reasoning: this is the general fix for the class of gap "West to North"
+// exposed, not a one-off patch for that specific phrasing.
+const LANE_STRING_FIELDS = ["originCity", "originState", "originRegion", "destCity", "destState", "weightBand", "destRegion"] as const;
+const LANE_NUMERIC_FIELDS = ["expectedVolumeKgPerMonth"] as const;
+type LaneField = (typeof LANE_STRING_FIELDS)[number] | (typeof LANE_NUMERIC_FIELDS)[number];
+type FilterOp = "eq" | "contains" | "gt" | "gte" | "lt" | "lte";
+
+const ORIGIN_FIELDS = new Set<LaneField>(["originCity", "originState", "originRegion"]);
+const DEST_FIELDS = new Set<LaneField>(["destCity", "destState", "destRegion"]);
+
+type LaneClause = { field: LaneField; op: FilterOp; value: unknown };
+
+function parseWhereClauses(v: unknown): LaneClause[] {
+  if (!Array.isArray(v)) return [];
+  const allFields = new Set<string>([...LANE_STRING_FIELDS, ...LANE_NUMERIC_FIELDS]);
+  const allOps = new Set<string>(["eq", "contains", "gt", "gte", "lt", "lte"]);
+  return v
+    .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+    .map((c) => ({ field: asString(c.field), op: asString(c.op), value: c.value }))
+    .filter((c): c is LaneClause => Boolean(c.field && allFields.has(c.field) && c.op && allOps.has(c.op)));
+}
+
+function evaluateLaneClause(lane: Lane, clause: LaneClause): boolean {
+  const isNumericField = (LANE_NUMERIC_FIELDS as readonly string[]).includes(clause.field);
+  const fieldValue = lane[clause.field as keyof Lane];
+
+  if (isNumericField) {
+    const fieldNum = Number(fieldValue);
+    const targetNum = Number(clause.value);
+    if (!Number.isFinite(fieldNum) || !Number.isFinite(targetNum)) return false;
+    switch (clause.op) {
+      case "eq": return fieldNum === targetNum;
+      case "gt": return fieldNum > targetNum;
+      case "gte": return fieldNum >= targetNum;
+      case "lt": return fieldNum < targetNum;
+      case "lte": return fieldNum <= targetNum;
+      default: return false; // "contains" is meaningless on a number
+    }
+  }
+
+  const fieldStr = String(fieldValue).toLowerCase();
+  const targetStr = String(clause.value).toLowerCase();
+  if (clause.op === "eq") return fieldStr === targetStr;
+  if (clause.op === "contains") return fieldStr.includes(targetStr);
+  return false; // gt/gte/lt/lte are meaningless on a string field
+}
+
 function filterLanes(data: ComparisonData, args: Record<string, unknown>): ToolResult {
   const originCity = asString(args.originCity)?.toLowerCase() ?? null;
   const originState = asString(args.originState)?.toLowerCase() ?? null;
   const destCity = asString(args.destCity)?.toLowerCase() ?? null;
   const destState = asString(args.destState)?.toLowerCase() ?? null;
   const weightBand = asString(args.weightBand)?.toLowerCase() ?? null;
+  const whereClauses = parseWhereClauses(args.where);
+  const originClauses = whereClauses.filter((c) => ORIGIN_FIELDS.has(c.field));
+  const destClauses = whereClauses.filter((c) => DEST_FIELDS.has(c.field));
+  const otherClauses = whereClauses.filter((c) => !ORIGIN_FIELDS.has(c.field) && !DEST_FIELDS.has(c.field));
 
-  const matches = data.lanes.filter((l) => {
-    if (originCity && !l.originCity.toLowerCase().includes(originCity)) return false;
-    if (originState && !l.originState.toLowerCase().includes(originState)) return false;
-    if (destCity && !l.destCity.toLowerCase().includes(destCity)) return false;
-    if (destState && !l.destState.toLowerCase().includes(destState)) return false;
-    if (weightBand && !l.weightBand.toLowerCase().includes(weightBand)) return false;
-    return true;
-  });
+  const matchesOrigin = (l: Lane) =>
+    (!originCity || l.originCity.toLowerCase().includes(originCity)) &&
+    (!originState || l.originState.toLowerCase().includes(originState)) &&
+    originClauses.every((c) => evaluateLaneClause(l, c));
+  const matchesDest = (l: Lane) =>
+    (!destCity || l.destCity.toLowerCase().includes(destCity)) &&
+    (!destState || l.destState.toLowerCase().includes(destState)) &&
+    destClauses.every((c) => evaluateLaneClause(l, c));
+  const matchesOther = (l: Lane) =>
+    (!weightBand || l.weightBand.toLowerCase().includes(weightBand)) && otherClauses.every((c) => evaluateLaneClause(l, c));
+
+  const matches = data.lanes.filter((l) => matchesOrigin(l) && matchesDest(l) && matchesOther(l));
+
+  // A fully-specified origin+destination query (both sides identified —
+  // whether by city, state, or region, in any combination — with nothing
+  // else narrowing the result) that matches zero lanes is a deterministic,
+  // complete fact: this lane isn't in the RFx, full stop. Templating that
+  // here — with real "closest data" context, not a guess — lets the caller
+  // skip an entire extra Gemini round just to have a model reword "0 lanes
+  // matched." Left out whenever weightBand or any other clause is also
+  // set: something besides origin/destination identity might be why it
+  // came up empty, and that's a more nuanced case than this shortcut
+  // should try to handle on its own.
+  let finalAnswer: string | undefined;
+  const hasOriginFilter = Boolean(originCity || originState) || originClauses.length > 0;
+  const hasDestFilter = Boolean(destCity || destState) || destClauses.length > 0;
+  const hasOtherFilter = Boolean(weightBand) || otherClauses.length > 0;
+  if (matches.length === 0 && hasOriginFilter && hasDestFilter && !hasOtherFilter) {
+    const fromOrigin = data.lanes.filter(matchesOrigin);
+    const toDestination = data.lanes.filter(matchesDest);
+    const originLabel = asString(args.originCity) ?? asString(args.originState) ?? (originClauses[0] ? String(originClauses[0].value) : "that origin");
+    const destLabel = asString(args.destCity) ?? asString(args.destState) ?? (destClauses[0] ? String(destClauses[0].value) : "that destination");
+    const lines = [`No lane from ${originLabel} to ${destLabel} is in this RFx (0 matches).`];
+    if (fromOrigin.length > 0) {
+      lines.push(`Lanes from ${originLabel} in this RFx: ${fromOrigin.map((l) => `${l.originCity} → ${l.destCity}`).join(", ")}.`);
+    }
+    if (toDestination.length > 0) {
+      lines.push(`Lanes to ${destLabel} in this RFx: ${toDestination.map((l) => `${l.originCity} → ${l.destCity}`).join(", ")}.`);
+    }
+    if (fromOrigin.length === 0 && toDestination.length === 0) {
+      lines.push(`This RFx has no lanes touching ${originLabel} or ${destLabel} at all.`);
+    }
+    finalAnswer = lines.join(" ");
+  }
 
   return {
     summary: `${matches.length} lane(s) matched.`,
     data: matches.map((l) => ({
       laneId: l.id,
-      origin: `${l.originCity}, ${l.originState}`,
-      destination: `${l.destCity}, ${l.destState}`,
+      origin: `${l.originCity}, ${l.originState} (${l.originRegion})`,
+      destination: `${l.destCity}, ${l.destState} (${l.destRegion})`,
       weightBand: l.weightBand,
+      expectedVolumeKgPerMonth: l.expectedVolumeKgPerMonth,
     })),
     displayHint: matches.length > 0 ? "table" : "none",
+    ...(finalAnswer ? { finalAnswer } : {}),
   };
 }
 
@@ -324,6 +431,83 @@ function explainFlag(data: ComparisonData, args: Record<string, unknown>): ToolR
   };
 }
 
+// --- 9. get_lane_charges ---
+// The gap that motivated this tool: none of the others expose individual
+// charge components (freight, fuel surcharge, loading, etc.) for a
+// lane/vendor — only totals and flags. A question like "which vendors have
+// a loading charge on this lane" has no correct answer without this.
+
+function getLaneCharges(data: ComparisonData, args: Record<string, unknown>): ToolResult {
+  const laneId = asString(args.laneId);
+  const vendorId = asString(args.vendorId);
+  if (!laneId) {
+    return { summary: "laneId is required — call filter_lanes first to find it.", data: null, displayHint: "none" };
+  }
+
+  const vendorIds = vendorId ? [vendorId] : data.vendors.map((v) => v.id);
+  const rows: Record<string, unknown>[] = [];
+  // vId + fieldKey -> row, kept alongside `rows` so the unit-economics pass
+  // below can group same-charge-type per_unit rows without re-deriving
+  // fieldKey from the display label (which is a human label, not a stable key).
+  const perUnitByFieldKey = new Map<string, { vendorId: string; row: Record<string, unknown>; ratePerUnitInr: number }[]>();
+
+  for (const vId of vendorIds) {
+    const vendor = data.vendors.find((v) => v.id === vId);
+    const result = data.landedCosts.get(vId)?.get(laneId);
+
+    if (!result || result.status === "not_quoted") {
+      rows.push({ vendorCode: vendor?.code ?? "?", charge: null, basis: null, rawValue: null, resolvedInr: null, status: "not quoted for this lane" });
+      continue;
+    }
+    if (result.status === "unreadable") {
+      rows.push({ vendorCode: vendor?.code ?? "?", charge: null, basis: null, rawValue: null, resolvedInr: null, status: "illegible in source document" });
+      continue;
+    }
+    for (const li of result.lineItems) {
+      const row: Record<string, unknown> = {
+        vendorCode: vendor?.code ?? "?",
+        charge: li.label,
+        basis: li.basis,
+        rawValue: li.normalizedValue,
+        resolvedInr: li.resolvedValueInr,
+        status: li.included ? "included" : (li.exclusionReason ?? "excluded"),
+        sourceQuote: li.sourceSnippet.quote || null,
+      };
+      rows.push(row);
+
+      // Same-basis unit-economics grouping (Case A — see
+      // docs/charge-normalization-unit-economics.md): group by fieldKey,
+      // not the display label, so wording differences ("Loading Charge" vs
+      // a raw unmapped label) don't split what's really the same charge type.
+      if (li.basis === "per_unit" && li.fieldKey && li.normalizedValue !== null) {
+        const key = li.fieldKey;
+        if (!perUnitByFieldKey.has(key)) perUnitByFieldKey.set(key, []);
+        perUnitByFieldKey.get(key)!.push({ vendorId: vId, row, ratePerUnitInr: li.normalizedValue });
+      }
+    }
+  }
+
+  for (const entries of perUnitByFieldKey.values()) {
+    const ranked = rankUnitEconomics(entries.map((e) => ({ vendorId: e.vendorId, ratePerUnitInr: e.ratePerUnitInr })));
+    if (ranked.length === 0) continue; // fewer than 2 vendors quoted this charge per-unit — nothing to rank
+    const rankByVendor = new Map(ranked.map((r) => [r.vendorId, r]));
+    for (const entry of entries) {
+      const r = rankByVendor.get(entry.vendorId);
+      if (!r) continue;
+      entry.row.unitEconomicsRank = `#${r.rank} of ${r.outOf} by ₹/unit${r.isCheapest ? " (cheapest)" : ""}`;
+      entry.row.unitEconomicsNote =
+        "Comparable directly by ₹/unit against other vendors quoting this same charge per-unit on this lane — the package name (box/carton/etc.) doesn't matter, " +
+        "only the rate does, since the actual unit count would cancel out of the comparison. Not comparable against a flat or per-kg charge without a real reference count, which isn't assumed here.";
+    }
+  }
+
+  return {
+    summary: `${rows.length} charge line item(s) for this lane${vendorId ? "" : ", across all vendors"}.`,
+    data: rows,
+    displayHint: rows.length > 0 ? "table" : "none",
+  };
+}
+
 // --- Registry: Gemini function declarations + handlers, kept together so they can't drift apart ---
 
 const stringParam = (description: string): Schema => ({ type: Type.STRING, description });
@@ -336,7 +520,11 @@ export const CHAT_TOOLS: ToolEntry[] = [
   {
     declaration: {
       name: "filter_lanes",
-      description: "Find lanes matching an origin/destination city or state, or a weight band. All fields optional; omit to match everything.",
+      description:
+        "Find lanes matching an origin/destination city or state, or a weight band. All fields optional; omit to match everything. " +
+        "For anything these simple fields can't express — filtering/grouping by REGION (North/South/East/West/Central/Northeast — e.g. \"West to North\"), " +
+        "or a numeric range on expectedVolumeKgPerMonth (e.g. \"over 30,000 kg/month\") — use the `where` clauses instead of guessing at city/state names. " +
+        "Every returned lane also already includes originRegion/destRegion and expectedVolumeKgPerMonth, so for a broad question you can often call this once with no filters and reason over the full labeled list yourself rather than issuing several narrow guesses.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -345,6 +533,26 @@ export const CHAT_TOOLS: ToolEntry[] = [
           destCity: stringParam("Destination city, partial match"),
           destState: stringParam("Destination state, partial match"),
           weightBand: stringParam("Weight band, partial match, e.g. '500-1000'"),
+          where: {
+            type: Type.ARRAY,
+            description:
+              "Additional filter clauses, ANDed with each other and with the fields above. Use for region or numeric-range filtering. " +
+              "Each clause: {field, op, value}. field: one of originCity, originState, originRegion, destCity, destState, destRegion, weightBand, expectedVolumeKgPerMonth. " +
+              "op: 'eq' or 'contains' for text fields (originRegion/destRegion must use 'eq' with an exact region name: North, South, East, West, Central, or Northeast); " +
+              "'eq'/'gt'/'gte'/'lt'/'lte' for the numeric field expectedVolumeKgPerMonth. value: always pass as a string, e.g. \"30000\" for a number.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                field: {
+                  type: Type.STRING,
+                  enum: ["originCity", "originState", "originRegion", "destCity", "destState", "destRegion", "weightBand", "expectedVolumeKgPerMonth"],
+                },
+                op: { type: Type.STRING, enum: ["eq", "contains", "gt", "gte", "lt", "lte"] },
+                value: stringParam("The value to compare against, as a string even for numeric fields"),
+              },
+              required: ["field", "op", "value"],
+            },
+          },
         },
       },
     },
@@ -442,6 +650,23 @@ export const CHAT_TOOLS: ToolEntry[] = [
       },
     },
     handler: simulateSplitAward,
+  },
+  {
+    declaration: {
+      name: "get_lane_charges",
+      description:
+        "Get individual charge components (freight, fuel surcharge, ODA, pickup, loading, state charge, green tax, FOV/liability, etc.) for one lane — the only tool that breaks a total down into its line items. Use this for any question about a specific charge type (e.g. \"which vendors have a loading charge on this lane\", \"what's vendor A's fuel surcharge here\") — get_flags and aggregate_cost only give totals and flags, not components. Requires laneId (call filter_lanes first to find it); omit vendorId for all vendors. " +
+        "When 2+ vendors quote the SAME charge type per-unit (per box, per carton, etc.) on this lane, each of those rows also carries unitEconomicsRank/unitEconomicsNote — a real, code-computed ranking by ₹/unit that's safe to cite directly (the package name doesn't matter, only the rate). This does NOT bridge a per-unit charge against a flat or per-kg one — never claim one is cheaper than the other by inventing a unit count; if asked to compare across bases, say that needs a real reference quantity you don't have.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          laneId: stringParam("Lane id, from filter_lanes"),
+          vendorId: stringParam("Vendor id to restrict to; omit for all vendors"),
+        },
+        required: ["laneId"],
+      },
+    },
+    handler: getLaneCharges,
   },
   {
     declaration: {

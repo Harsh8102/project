@@ -7,11 +7,14 @@ export type ToolCallTrace = {
   result: { summary: string; data: unknown; displayHint: "table" | "chart" | "none" };
 };
 
+export type MessageTimings = { totalMs: number; marks: { label: string; sinceLastMs: number; sinceStartMs: number }[] };
+
 export type ChatMessageSummary = {
   id: string;
   role: ChatRole;
   text: string;
   toolCalls: ToolCallTrace[] | null;
+  timings: MessageTimings | null;
 };
 
 export async function getChatHistory(rfxId: string): Promise<ChatMessageSummary[]> {
@@ -22,5 +25,6 @@ export async function getChatHistory(rfxId: string): Promise<ChatMessageSummary[
     role: d.role as ChatRole,
     text: d.text,
     toolCalls: (d.toolCalls as ToolCallTrace[] | null) ?? null,
+    timings: (d.timings as MessageTimings | null) ?? null,
   }));
 }

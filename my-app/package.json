@@ -16,6 +16,7 @@
     "test:vendor-b-extraction": "tsx --env-file=.env.local scripts/testVendorBExtraction.ts",
     "test:vendors-cde-extraction": "tsx --env-file=.env.local scripts/testVendorsCDEExtraction.ts",
     "test:vendor-e-extraction": "tsx --env-file=.env.local scripts/testVendorEOnly.ts",
+    "test:chat-guardrails": "tsx --env-file=.env.local scripts/adversarialChatTest.ts",
     "extract:all": "tsx --env-file=.env.local scripts/runFullExtraction.ts"
   },
   "dependencies": {

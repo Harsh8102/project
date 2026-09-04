@@ -10,6 +10,22 @@ import type { FlagType } from "../../db/models/ExtractedField";
 
 const LOW_CONFIDENCE_THRESHOLD = 0.6;
 
+// The extraction prompt asks for "the numeric value," but a vendor document
+// often states a charge with its own formatting intact (a literal "%" on a
+// percentage charge, comma thousands-separators on a large flat amount) —
+// Gemini legitimately echoes what's on the page rather than silently
+// stripping it. Trust boundary: the LLM extracts what's there, this
+// deterministic layer is responsible for tolerating ordinary formatting
+// before deciding a value is genuinely unparseable, not just cosmetically
+// dressed. `Number("0.29%")` is NaN with no cleanup, which was flagging
+// every otherwise-valid FOV/insurance percentage as low_confidence.
+function parseNumeric(raw: string): number | null {
+  const cleaned = raw.trim().replace(/,/g, "").replace(/%$/, "").trim();
+  if (cleaned === "") return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
 export type RawChargeLike = {
   rawHeaderLabel: string;
   suggestedTaxonomyKey: string;
@@ -37,15 +53,14 @@ export type NormalizedCharge = {
 
 export function normalizeCharge(raw: RawChargeLike): NormalizedCharge {
   const resolution = resolveChargeKey(raw.rawHeaderLabel, raw.suggestedTaxonomyKey, raw.confidence);
-  const numericValue = Number(raw.value);
-  const hasNumericValue = Number.isFinite(numericValue);
+  const numericValue = parseNumeric(raw.value);
 
   let normalizedValue: number | null = null;
   let currency: string | null = raw.currency !== "unspecified" ? raw.currency : null;
   let flagType: FlagType | null = null;
   let flagNote: string | null = null;
 
-  if (!hasNumericValue) {
+  if (numericValue === null) {
     flagType = "low_confidence";
     flagNote = `Could not parse "${raw.value}" as a number`;
   } else if (raw.currency === "USD") {

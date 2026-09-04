@@ -1,6 +1,10 @@
 // The analyst chat agent's endpoint (§9 of the functional plan). The DB is
 // authoritative for conversation history (not the client's in-memory
 // state), so a reload or a new session picks up the same conversation.
+//
+// Timed end-to-end (see RequestTimer, lib/timing.ts) — added after real
+// user reports of slow responses; findings and the fix (or lack of one, and
+// why) are written up in docs/chat-response-time-investigation.md.
 
 import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db/connect";
@@ -8,17 +12,11 @@ import { ChatMessageModel } from "@/lib/db/models/ChatMessage";
 import { getComparisonData } from "@/lib/db/queries/getComparisonData";
 import { runAgentTurn, MODELS } from "@/lib/ai/gemini";
 import { CHAT_TOOLS, executeChatTool } from "@/lib/ai/chat/tools";
-
-const SYSTEM_INSTRUCTION = `You are the analyst co-pilot for a freight procurement RFx (PTL domestic lanes). A buyer is comparing 5 vendors and needs to make a defensible award decision.
-
-Rules — these are not optional:
-- Every numeric claim you make must come from a tool you called in this turn. Never state a number, score, or ranking from memory of earlier turns or from general knowledge — call a tool for it, even if you answered something similar before.
-- If a tool result is empty, partial, or a vendor has no submission for something, say so plainly. Never fill a gap with an assumption.
-- Never state a ranking or "vendor X is best" without also naming what drove it (gate pass/fail, the relevant scores) — the tool results already carry this, just include it.
-- If a question is outside this RFx (legal advice, unrelated topics, anything you have no tool for), decline clearly and say what you can help with instead — don't improvise an answer.
-- Be concise. This is a working tool for a buyer under time pressure, not an essay.`;
+import { CHAT_SYSTEM_INSTRUCTION } from "@/lib/ai/chat/systemInstruction";
+import { RequestTimer } from "@/lib/timing";
 
 export async function POST(req: Request) {
+  const timer = new RequestTimer();
   const body = await req.json();
   const { rfxId, message } = body as { rfxId?: string; message?: string };
 
@@ -27,13 +25,17 @@ export async function POST(req: Request) {
   }
 
   await connectToDatabase();
+  timer.mark("connectDb");
 
   await ChatMessageModel.create({ rfxId, role: "user", text: message });
+  timer.mark("saveUserMessage");
 
   const priorMessages = await ChatMessageModel.find({ rfxId }).sort({ createdAt: 1 }).lean();
   const history = priorMessages.map((m) => ({ role: m.role as "user" | "model", text: m.text }));
+  timer.mark("loadHistory");
 
   const comparisonData = await getComparisonData(rfxId);
+  timer.mark("getComparisonData");
 
   // Every persisted user message must end up paired with a model reply —
   // otherwise a failed call (rate limit, transient API error) leaves a
@@ -45,10 +47,11 @@ export async function POST(req: Request) {
   try {
     const result = await runAgentTurn({
       model: MODELS.chat,
-      systemInstruction: SYSTEM_INSTRUCTION,
+      systemInstruction: CHAT_SYSTEM_INSTRUCTION,
       tools: CHAT_TOOLS.map((t) => t.declaration),
       history,
       executeTool: async (name, args) => executeChatTool(comparisonData, name, args) as unknown as Record<string, unknown>,
+      timer,
     });
     text = result.text;
     toolCalls = result.toolCalls;
@@ -56,12 +59,21 @@ export async function POST(req: Request) {
     console.error("Chat agent turn failed:", err);
     text = "I hit an error reaching the model just now (possibly a rate limit) — please try that again in a moment.";
   }
+  timer.mark("runAgentTurn");
 
-  const saved = await ChatMessageModel.create({ rfxId, role: "model", text, toolCalls });
+  // Snapshot before the save so `timings` reflects everything up to (not
+  // including) persisting itself — `saveModelMessage` below still gets
+  // marked and logged, just not baked into the stored document.
+  const timings = timer.toJSON();
+  const saved = await ChatMessageModel.create({ rfxId, role: "model", text, toolCalls, timings });
+  timer.mark("saveModelMessage");
+
+  console.log(`[chat timing] rfxId=${rfxId}\n${timer.summary()}`);
 
   return NextResponse.json({
     id: String(saved._id),
     text,
     toolCalls,
+    timings,
   });
 }
