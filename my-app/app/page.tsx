@@ -3,6 +3,8 @@ import { getLatestRfxOverview } from "@/lib/db/queries/getRfxOverview";
 import { getComparisonData } from "@/lib/db/queries/getComparisonData";
 import { Button } from "@/components/ui/button";
 
+export const dynamic = "force-dynamic";
+
 const HOW_IT_WORKS = [
   {
     step: "01",
