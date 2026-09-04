@@ -179,7 +179,7 @@ Report currency as INR, USD, or "unspecified" if not stated (assume INR only if 
 Never guess a number that isn't stated. Confidence should reflect how directly the document states each value.`;
 }
 
-export async function extractRatesChunk(document: DocumentInput, targetLanes: TargetLane[]): Promise<RawExtractionResponse> {
+export async function extractRatesChunk(document: DocumentInput, targetLanes: TargetLane[], options: { thinkingBudget?: number } = {}): Promise<RawExtractionResponse> {
   const part = document.kind === "text" ? textPart(document.text) : inlineDataPart(document.buffer, document.mimeType);
 
   const raw = await generateStructured({
@@ -187,6 +187,7 @@ export async function extractRatesChunk(document: DocumentInput, targetLanes: Ta
     systemInstruction: buildSystemInstruction(targetLanes),
     parts: [part],
     responseSchema: buildResponseSchema(),
+    thinkingBudget: options.thinkingBudget,
   });
 
   return ExtractionResponseSchema.parse(raw);

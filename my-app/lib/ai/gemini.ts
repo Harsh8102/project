@@ -115,6 +115,11 @@ export async function generateStructured(params: {
   systemInstruction: string;
   parts: (ReturnType<typeof textPart> | ReturnType<typeof inlineDataPart>)[];
   responseSchema: Schema;
+  // Optional, off by default — lets a caller test/opt into disabling
+  // Gemini's default "thinking" pass (0 = disabled, per the SDK) for a
+  // task that's closer to careful reading/classification than open-ended
+  // reasoning. Unset behaves exactly as before this param existed.
+  thinkingBudget?: number;
 }): Promise<unknown> {
   const ai = getGeminiClient();
   return callWithRetry(async () => {
@@ -125,6 +130,7 @@ export async function generateStructured(params: {
         systemInstruction: params.systemInstruction,
         responseMimeType: "application/json",
         responseSchema: params.responseSchema,
+        ...(params.thinkingBudget !== undefined ? { thinkingConfig: { thinkingBudget: params.thinkingBudget } } : {}),
       },
     });
     const text = response.text;

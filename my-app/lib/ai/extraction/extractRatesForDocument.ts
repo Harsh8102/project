@@ -59,7 +59,7 @@ function matchesKnownLane(description: string, lanes: CanonicalLane[]): boolean 
 export async function extractRatesForDocument(
   source: RateDocumentSource,
   lanes: CanonicalLane[],
-  options: { batchSize?: number; onProgress?: (chunksDone: number, chunksTotal: number) => void } = {}
+  options: { batchSize?: number; onProgress?: (chunksDone: number, chunksTotal: number) => void; thinkingBudget?: number } = {}
 ): Promise<RateExtractionOutcome> {
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const canChunk = source.kind === "xlsx" && lanes.length > CHUNK_THRESHOLD;
@@ -71,24 +71,16 @@ export async function extractRatesForDocument(
   let regionMatrix: RawExtractionResponse["regionMatrix"] | null = null;
   let chunksRun = 0;
 
-  for (const batchLanes of batches) {
+  function runChunk(batchLanes: CanonicalLane[]): Promise<RawExtractionResponse> {
     const targetLanes = batchLanes.map(toTargetLane);
-
     const chunkDocument: DocumentInput =
       source.kind === "xlsx"
         ? { kind: "text", text: xlsxToPromptText(filterRowsByLanePairs(source.parsedXlsx, batchLanes)) }
         : source;
+    return extractRatesChunk(chunkDocument, targetLanes, { thinkingBudget: options.thinkingBudget });
+  }
 
-    const result = await extractRatesChunk(chunkDocument, targetLanes);
-    chunksRun++;
-    options.onProgress?.(chunksRun, batches.length);
-
-    if (result.documentStructure === "region_matrix") {
-      documentStructure = "region_matrix";
-      regionMatrix = result.regionMatrix;
-      break; // the matrix answers every lane at once — no need to run further chunks
-    }
-
+  function mergeResult(batchLanes: CanonicalLane[], result: RawExtractionResponse) {
     const targetIndexSet = new Set(batchLanes.map((l) => l.laneIndex));
     for (const lr of result.laneResults) {
       if (lr.targetLaneIndex === -1) {
@@ -106,6 +98,47 @@ export async function extractRatesForDocument(
       if (targetIndexSet.has(lr.targetLaneIndex) && !laneResultsByIndex.has(lr.targetLaneIndex)) {
         laneResultsByIndex.set(lr.targetLaneIndex, lr);
       }
+    }
+  }
+
+  // Chunks target disjoint lane subsets of the same document — nothing
+  // downstream of the FIRST chunk depends on an earlier chunk's result,
+  // except one thing: if the document turns out to be a region_matrix (one
+  // response answers every lane at once), every further chunk is wasted
+  // work. So the first chunk runs alone to make that call cheaply, then —
+  // only for the common per_lane case — every remaining chunk fires in
+  // parallel instead of the old one-at-a-time loop. This was the single
+  // biggest lever on wall-clock extraction time: a real 30-lane/4-chunk
+  // document that took ~157s sequentially (each chunk paying Gemini's own
+  // ~24-51s per-call latency back to back) drops to roughly the time of
+  // the SLOWEST single chunk, since the other three now overlap. No model
+  // or accuracy risk — every chunk still asks the exact same question the
+  // same way, just concurrently instead of queued.
+  const [firstBatch, ...restBatches] = batches;
+  const firstResult = await runChunk(firstBatch);
+  chunksRun = 1;
+  options.onProgress?.(chunksRun, batches.length);
+
+  if (firstResult.documentStructure === "region_matrix") {
+    documentStructure = "region_matrix";
+    regionMatrix = firstResult.regionMatrix;
+  } else {
+    mergeResult(firstBatch, firstResult);
+
+    if (restBatches.length > 0) {
+      await Promise.all(
+        restBatches.map(async (batchLanes) => {
+          const result = await runChunk(batchLanes);
+          chunksRun++;
+          options.onProgress?.(chunksRun, batches.length);
+          // A later chunk reporting region_matrix on a document the first
+          // chunk already read as per_lane would be a genuinely confusing,
+          // inconsistent signal — treat it the same as any other chunk
+          // (merge what it found) rather than silently flipping the
+          // outcome's overall documentStructure partway through.
+          mergeResult(batchLanes, result);
+        })
+      );
     }
   }
 

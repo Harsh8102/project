@@ -508,6 +508,85 @@ function getLaneCharges(data: ComparisonData, args: Record<string, unknown>): To
   };
 }
 
+// --- 10. rank_vendor_lanes_by_cost ---
+// The gap that motivated this tool: a real user question ("top 2 lanes
+// where Bharat Roadlines has quoted the least") had no correct answer —
+// aggregate_cost only gives one total/average across ALL of a vendor's
+// lanes, and get_lane_charges needs a laneId already in hand and doesn't
+// sum to a total. Live-tested: without this tool the agent burned 4 tool
+// calls trying to improvise an answer, then gave up and asked the user to
+// do the arithmetic themselves.
+//
+// Only ranks lanes with a status of "resolved" — every charge counted,
+// nothing excluded (lib/scoring/computeLandedCost.ts). A "partial" total
+// (e.g. a per-unit or FOV charge excluded for lack of a cost assumption)
+// is deliberately left OUT of the ranking rather than compared on an
+// artificially lower number — the same discipline the rate-competitiveness
+// score and every landed-cost total in this app already follow. Excluded
+// lanes are still reported, with why, so a buyer sees what's missing
+// rather than a silently incomplete ranking.
+
+function rankVendorLanesByCost(data: ComparisonData, args: Record<string, unknown>): ToolResult {
+  const vendorArg = asString(args.vendorId);
+  if (!vendorArg) {
+    return { summary: "vendorId is required.", data: null, displayHint: "none" };
+  }
+  // Resolve leniently — id, code ("A"), or name/partial-name all work,
+  // rather than silently returning "no data" whenever the model passes a
+  // vendor's code or name instead of its real database id (confirmed live:
+  // a real question about "Bharat Roadlines" got the model to correctly
+  // infer vendor code "A" on its own, but not the underlying id — an
+  // exact-id-only match would have wrongly reported zero data for every
+  // one of that vendor's lanes instead of a real answer).
+  const needle = vendorArg.toLowerCase();
+  const vendor =
+    data.vendors.find((v) => v.id === vendorArg) ??
+    data.vendors.find((v) => v.code.toLowerCase() === needle) ??
+    data.vendors.find((v) => v.name.toLowerCase().includes(needle));
+  if (!vendor) {
+    return { summary: `No vendor matches "${vendorArg}".`, data: null, displayHint: "none" };
+  }
+  const order = args.order === "most_expensive" ? "most_expensive" : "cheapest";
+  const limitArg = Number(args.limit);
+  const limit = Number.isFinite(limitArg) && limitArg > 0 ? Math.floor(limitArg) : 5;
+
+  const laneMap = data.landedCosts.get(vendor.id) ?? new Map();
+
+  const resolved: { laneId: string; lane: string; totalInr: number }[] = [];
+  const excludedFromRanking: { laneId: string; lane: string; reason: string }[] = [];
+
+  for (const lane of data.lanes) {
+    const result = laneMap.get(lane.id);
+    const laneLabel = `${lane.originCity} → ${lane.destCity}`;
+    if (!result || result.status !== "resolved" || result.totalInr === null) {
+      const reason =
+        !result || result.status === "not_quoted"
+          ? "not quoted for this lane"
+          : result.status === "unreadable"
+            ? "illegible in source document"
+            : `partial total — not fully resolved (${result.excludedReasons.join("; ") || "one or more charges excluded"})`;
+      excludedFromRanking.push({ laneId: lane.id, lane: laneLabel, reason });
+      continue;
+    }
+    resolved.push({ laneId: lane.id, lane: laneLabel, totalInr: result.totalInr });
+  }
+
+  resolved.sort((a, b) => (order === "cheapest" ? a.totalInr - b.totalInr : b.totalInr - a.totalInr));
+  const top = resolved.slice(0, limit);
+
+  return {
+    summary:
+      `${vendor.code}: ${top.length} ${order === "cheapest" ? "cheapest" : "most expensive"} lane(s) by fully-resolved landed cost ` +
+      `(${resolved.length} of ${data.lanes.length} lane(s) had a fully-resolved total; ${excludedFromRanking.length} excluded from ranking).`,
+    data: {
+      vendorCode: vendor.code,
+      ranked: top.map((r, i) => ({ rank: i + 1, laneId: r.laneId, lane: r.lane, totalInr: Math.round(r.totalInr) })),
+      excludedFromRanking,
+    },
+    displayHint: top.length > 0 ? "table" : "none",
+  };
+}
+
 // --- Registry: Gemini function declarations + handlers, kept together so they can't drift apart ---
 
 const stringParam = (description: string): Schema => ({ type: Type.STRING, description });
@@ -667,6 +746,25 @@ export const CHAT_TOOLS: ToolEntry[] = [
       },
     },
     handler: getLaneCharges,
+  },
+  {
+    declaration: {
+      name: "rank_vendor_lanes_by_cost",
+      description:
+        "Rank ONE vendor's lanes by landed cost, cheapest (or most expensive) first — the only tool that answers questions like \"which lanes is this vendor cheapest on\" or \"top N lanes where vendor X quoted the least\". " +
+        "Only ranks lanes with a FULLY resolved total (every charge counted, nothing excluded) — a lane with a partial total (e.g. a per-unit or FOV charge excluded for lack of a cost assumption) is deliberately left OUT of the ranking rather than compared on an artificially lower number, and is listed separately in excludedFromRanking with why. " +
+        "Use aggregate_cost instead for one vendor's overall total/average across ALL lanes; use get_lane_charges for one specific lane's individual charge breakdown.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          vendorId: stringParam("The vendor to rank lanes for — a real vendor id, a code (e.g. 'A'), or a name/partial name all work"),
+          order: { type: Type.STRING, enum: ["cheapest", "most_expensive"], description: "Sort direction; defaults to cheapest first" },
+          limit: { type: Type.NUMBER, description: "How many top lanes to return; defaults to 5" },
+        },
+        required: ["vendorId"],
+      },
+    },
+    handler: rankVendorLanesByCost,
   },
   {
     declaration: {
