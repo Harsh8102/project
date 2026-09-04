@@ -92,6 +92,13 @@ export const CHARGE_TAXONOMY: ChargeTaxonomyEntry[] = [
     ],
   },
   {
+    key: "lr_docket_charge",
+    label: "LR / Docket Charge",
+    definition: "Charge for issuing the Lorry Receipt (LR) / consignment docket — the shipment's legal transport document.",
+    validBases: ["flat"],
+    aliases: ["lr charge", "docket charge", "lorry receipt charge", "lorry receipt", "documentation charge", "lr fee", "docket fee"],
+  },
+  {
     key: "state_charge",
     label: "State Charge",
     definition: "Inter-state or intra-state statutory/entry charges specific to certain states.",
