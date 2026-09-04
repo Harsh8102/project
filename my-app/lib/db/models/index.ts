@@ -4,3 +4,4 @@ export * from "./Vendor";
 export * from "./VendorSubmission";
 export * from "./ExtractedField";
 export * from "./DecisionRecord";
+export * from "./ChatMessage";
