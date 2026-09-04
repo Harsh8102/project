@@ -33,7 +33,7 @@ export default async function RfxOverviewPage() {
           </p>
         </div>
         <div className="flex items-center gap-2.5">
-          <ApiKeyControl />
+          <ApiKeyControl chatProvider={process.env.CHAT_PROVIDER === "groq" ? "groq" : "gemini"} />
           <Badge className="capitalize">{rfx.status}</Badge>
         </div>
       </div>

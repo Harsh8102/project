@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ChatMessageSummary, ToolCallTrace } from "@/lib/db/queries/getChatHistory";
-import { geminiKeyHeader } from "@/lib/client/geminiKeyStorage";
+import { geminiKey, groqKey } from "@/lib/client/apiKeyStorage";
 import { ToolResultView } from "./ToolResultView";
 import { TimingBadge } from "./TimingBadge";
 
@@ -92,7 +92,7 @@ export function ChatPanel({
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...geminiKeyHeader() },
+        headers: { "Content-Type": "application/json", ...geminiKey.header(), ...groqKey.header() },
         body: JSON.stringify({ rfxId, message: trimmed }),
       });
       const data = await res.json();
