@@ -10,9 +10,13 @@ import { connectToDatabase } from "@/lib/db/connect";
 import { LaneModel } from "@/lib/db/models/Lane";
 import { VendorSubmissionModel } from "@/lib/db/models/VendorSubmission";
 import { processFormSubmission, processRatesSubmission } from "@/lib/ai/extraction/processSubmission";
+import { runWithApiKeyOverride } from "@/lib/ai/gemini";
 
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Viewer-supplied key (see components/ApiKeyControl.tsx) — never logged,
+  // never persisted, used only to scope this request's Gemini calls.
+  const userApiKey = req.headers.get("x-gemini-api-key");
   await connectToDatabase();
 
   const submission = await VendorSubmissionModel.findById(id);
@@ -45,17 +49,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
         const vendorId = String(submission.vendorId);
         const section = submission.section;
 
-        let result;
-        if (section === "rates") {
-          const lanes = await LaneModel.find({ rfxId: submission.rfxId });
-          const laneIdByIndex = new Map(lanes.map((l) => [l.laneIndex, String(l._id)]));
-          result = await processRatesSubmission(rfxId, vendorId, submission, laneIdByIndex, {
-            onProgress: (chunksDone, chunksTotal) => send({ type: "progress", chunksDone, chunksTotal }),
-          });
-        } else {
+        const result = await runWithApiKeyOverride(userApiKey, async () => {
+          if (section === "rates") {
+            const lanes = await LaneModel.find({ rfxId: submission.rfxId });
+            const laneIdByIndex = new Map(lanes.map((l) => [l.laneIndex, String(l._id)]));
+            return processRatesSubmission(rfxId, vendorId, submission, laneIdByIndex, {
+              onProgress: (chunksDone, chunksTotal) => send({ type: "progress", chunksDone, chunksTotal }),
+            });
+          }
           send({ type: "progress", chunksDone: 0, chunksTotal: 1 });
-          result = await processFormSubmission(rfxId, vendorId, section, submission);
-        }
+          return processFormSubmission(rfxId, vendorId, section, submission);
+        });
 
         send({ type: "done", status: result.status, fieldsWritten: result.fieldsWritten, fieldsFlagged: result.fieldsFlagged });
       } catch (err) {

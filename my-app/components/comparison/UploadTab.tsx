@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import type { SubmissionSection } from "@/lib/db/models/VendorSubmission";
 import type { RfxOverview, SubmissionSummary } from "@/lib/db/queries/getRfxOverview";
 import { useToastStack, ToastStack } from "@/components/ui/toast-stack";
+import { geminiKeyHeader } from "@/lib/client/geminiKeyStorage";
 
 const SUBMISSION_SECTIONS: SubmissionSection[] = ["rates", "questionnaire", "terms"];
 
@@ -101,7 +102,7 @@ export function UploadTab({ overview }: { overview: RfxOverview }) {
 
     let res: Response;
     try {
-      res = await fetch(`/api/submissions/${submissionId}/process`, { method: "POST" });
+      res = await fetch(`/api/submissions/${submissionId}/process`, { method: "POST", headers: geminiKeyHeader() });
     } catch {
       pushToast({ tone: "danger", title: `${vendorLabel} ${SECTION_LABELS[section]} — couldn't reach the server`, detail: "Check your connection and try again." });
       return;

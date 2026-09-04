@@ -5,6 +5,7 @@ import { getChatHistory } from "@/lib/db/queries/getChatHistory";
 import { Badge } from "@/components/ui/badge";
 import { RfxWorkspaceShell } from "@/components/RfxWorkspaceShell";
 import { ComparisonTabs } from "@/components/comparison/ComparisonTabs";
+import { ApiKeyControl } from "@/components/ApiKeyControl";
 
 function mapToRecord<V>(m: Map<string, V>): Record<string, V> {
   return Object.fromEntries(m);
@@ -31,7 +32,10 @@ export default async function RfxOverviewPage() {
             {rfx.laneCount} lanes · {rfx.vendors.length} vendors
           </p>
         </div>
-        <Badge className="capitalize">{rfx.status}</Badge>
+        <div className="flex items-center gap-2.5">
+          <ApiKeyControl />
+          <Badge className="capitalize">{rfx.status}</Badge>
+        </div>
       </div>
 
       <RfxWorkspaceShell rfxId={rfx.id} chatHistory={chatHistory}>

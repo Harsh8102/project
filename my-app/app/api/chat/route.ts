@@ -10,7 +10,7 @@ import { NextResponse } from "next/server";
 import { connectToDatabase } from "@/lib/db/connect";
 import { ChatMessageModel } from "@/lib/db/models/ChatMessage";
 import { getComparisonData } from "@/lib/db/queries/getComparisonData";
-import { runAgentTurn, MODELS } from "@/lib/ai/gemini";
+import { runAgentTurn, runWithApiKeyOverride, MODELS } from "@/lib/ai/gemini";
 import { CHAT_TOOLS, executeChatTool } from "@/lib/ai/chat/tools";
 import { CHAT_SYSTEM_INSTRUCTION } from "@/lib/ai/chat/systemInstruction";
 import { RequestTimer } from "@/lib/timing";
@@ -23,6 +23,10 @@ export async function POST(req: Request) {
   if (!rfxId || !message) {
     return NextResponse.json({ error: "rfxId and message are required" }, { status: 400 });
   }
+
+  // Viewer-supplied key (see components/ApiKeyControl.tsx) — never logged,
+  // never persisted, used only to scope this request's Gemini calls.
+  const userApiKey = req.headers.get("x-gemini-api-key");
 
   await connectToDatabase();
   timer.mark("connectDb");
@@ -45,19 +49,26 @@ export async function POST(req: Request) {
   let text: string;
   let toolCalls: Awaited<ReturnType<typeof runAgentTurn>>["toolCalls"] = [];
   try {
-    const result = await runAgentTurn({
-      model: MODELS.chat,
-      systemInstruction: CHAT_SYSTEM_INSTRUCTION,
-      tools: CHAT_TOOLS.map((t) => t.declaration),
-      history,
-      executeTool: async (name, args) => executeChatTool(comparisonData, name, args) as unknown as Record<string, unknown>,
-      timer,
-    });
+    const result = await runWithApiKeyOverride(userApiKey, () =>
+      runAgentTurn({
+        model: MODELS.chat,
+        systemInstruction: CHAT_SYSTEM_INSTRUCTION,
+        tools: CHAT_TOOLS.map((t) => t.declaration),
+        history,
+        executeTool: async (name, args) => executeChatTool(comparisonData, name, args) as unknown as Record<string, unknown>,
+        timer,
+      })
+    );
     text = result.text;
     toolCalls = result.toolCalls;
   } catch (err) {
     console.error("Chat agent turn failed:", err);
-    text = "I hit an error reaching the model just now (possibly a rate limit) — please try that again in a moment.";
+    // The demo's shared key is the single most likely failure point (quota,
+    // shared-tier congestion — see .env.local's dated notes) — nudge toward
+    // the self-serve fix only when this request wasn't already using one.
+    text = userApiKey
+      ? "I hit an error reaching the model with your API key — double-check it's a valid Gemini key and try again."
+      : "I hit an error reaching the model just now (likely the shared demo key is rate-limited). Click \"API key\" above and paste your own free Gemini key (aistudio.google.com/apikey) to keep going.";
   }
   timer.mark("runAgentTurn");
 

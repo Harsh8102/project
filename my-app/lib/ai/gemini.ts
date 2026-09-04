@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   GoogleGenAI,
   Type,
@@ -11,7 +12,28 @@ import type { RequestTimer } from "@/lib/timing";
 
 let client: GoogleGenAI | null = null;
 
+// A hosted demo shares one Gemini key/quota across every viewer — a single
+// evaluator hammering the co-pilot (or a shared free-tier outage, see
+// .env.local's dated notes) can starve everyone else. `runWithApiKeyOverride`
+// lets a request carry its own key (a viewer-supplied one, see
+// app/api/chat/route.ts and the process route) instead of the shared server
+// key, scoped via AsyncLocalStorage rather than threaded through every
+// extraction/chat function signature — those already just call
+// `getGeminiClient()`, so this is a zero-signature-change addition. Requests
+// with different overrides running concurrently never share state: each
+// override gets its own freshly-constructed client, never the cached one.
+const apiKeyOverride = new AsyncLocalStorage<string>();
+
+export function runWithApiKeyOverride<T>(key: string | null | undefined, fn: () => Promise<T>): Promise<T> {
+  const trimmed = key?.trim();
+  if (!trimmed) return fn();
+  return apiKeyOverride.run(trimmed, fn);
+}
+
 export function getGeminiClient(): GoogleGenAI {
+  const override = apiKeyOverride.getStore();
+  if (override) return new GoogleGenAI({ apiKey: override });
+
   if (!client) {
     if (!process.env.GEMINI_API_KEY) {
       throw new Error("GEMINI_API_KEY is not set. Copy .env.local.example to .env.local and fill it in.");
