@@ -120,6 +120,35 @@ export async function callOpenAiCompatibleWithBoundedRetry(params: {
 
 export type CallOpenAiCompatible = (messages: OpenAiMessage[], tools: ReturnType<typeof toOpenAiTools>) => Promise<OpenAiChatCompletionResponse>;
 
+function countWords(s: string): number {
+  return (s.match(/[A-Za-z]{2,}/g) || []).length;
+}
+
+// A rare but real failure mode of gpt-oss-family "harmony" reasoning
+// models (the underlying model behind all three chat tiers — Groq,
+// Cerebras, OpenRouter): every provider's API normally returns the raw
+// chain-of-thought in a separate `reasoning` field, cleanly apart from
+// `content` — confirmed directly against all three providers' raw
+// responses, including replaying this exact app's real, full 100+-message
+// conversation history through each. But a live incident showed `content`
+// itself can occasionally contain a long run of leaked reasoning fragments
+// (mostly ellipses, almost no real words, many paragraph breaks) with a
+// perfectly clean final answer tacked onto the end — a genuine model/
+// inference-stack glitch, not reproducible on demand since LLM output is
+// stochastic. Detected by shape rather than prevented outright, and
+// treated as a failure so the existing retry/fallback-to-next-tier
+// machinery (chatAgent.ts) handles it — a real answer replaces it within
+// a second or two, instead of a user ever seeing this.
+function looksLikeLeakedReasoning(text: string): boolean {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (paragraphs.length < 6) return false; // a normal answer, even a short one with a stray "...", won't have this many paragraph breaks
+  const junkParagraphs = paragraphs.filter((p) => p.length < 30 && countWords(p) <= 2);
+  return junkParagraphs.length >= 5 && junkParagraphs.length / paragraphs.length > 0.4;
+}
+
 /**
  * Provider-agnostic multi-round tool-calling loop — the exact same
  * contract as lib/ai/gemini.ts's runAgentTurn, so any caller (or another
@@ -155,7 +184,13 @@ export async function runOpenAiCompatibleAgentTurn(params: {
     const message = data.choices?.[0]?.message;
     const calls = message?.tool_calls;
     if (!calls || calls.length === 0) {
-      return { text: message?.content ?? "", toolCalls };
+      const text = message?.content ?? "";
+      if (looksLikeLeakedReasoning(text)) {
+        throw new Error(
+          `${params.timerLabel}: model response looked like leaked reasoning/chain-of-thought rather than a real answer (rare gpt-oss-family failure mode) — treating as a failure so the fallback chain retries.`
+        );
+      }
+      return { text, toolCalls };
     }
 
     messages.push({ role: "assistant", content: message?.content ?? "", tool_calls: calls });
