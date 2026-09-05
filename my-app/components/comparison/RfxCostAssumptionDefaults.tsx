@@ -32,7 +32,7 @@ export function RfxCostAssumptionDefaults({
   defaults: RfxCostAssumptionDefaultsValue;
 }) {
   const router = useRouter();
-  const [pendingField, setPendingField] = useState<Field | null>(null);
+  const [pendingField, setPendingField] = useState<Field | "reset" | null>(null);
 
   // Clears "saving" only once the server-refreshed prop reflects the
   // committed value — same pattern as CostAssumptionSliders, for the same
@@ -53,10 +53,33 @@ export function RfxCostAssumptionDefaults({
     router.refresh();
   }
 
+  async function reset() {
+    setPendingField("reset");
+    await fetch(`/api/rfx/${rfxId}/cost-assumptions`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ avgWeightPerUnitKg: null, referenceInvoiceValueInr: null }),
+    });
+    router.refresh();
+  }
+
+  const isSet = defaults.avgWeightPerUnitKg != null || defaults.referenceInvoiceValueInr != null;
+
   return (
     <div className="flex flex-col gap-3.5 border-t border-border bg-muted/40 px-4 py-3">
-      <div className="text-[11px] font-bold tracking-wide text-muted-foreground uppercase">
-        Overall cost assumptions — RFx-wide defaults
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[11px] font-bold tracking-wide text-muted-foreground uppercase">
+          Overall cost assumptions — RFx-wide defaults
+        </div>
+        {isSet && (
+          <button
+            onClick={reset}
+            disabled={pendingField !== null}
+            className="text-[10.5px] font-semibold text-muted-foreground underline decoration-dotted hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+          >
+            {pendingField === "reset" ? "Resetting…" : "Reset to unset"}
+          </button>
+        )}
       </div>
       <p className="text-[11px] text-muted-foreground">
         Applied to every lane unless that lane has its own override (set from Lane detail). Setting these resolves
@@ -73,7 +96,7 @@ export function RfxCostAssumptionDefaults({
           unit="kg/unit"
           sourceText={defaults.avgWeightPerUnitKg != null ? "RFx-wide default" : "not set — per-unit charges stay excluded"}
           sourceClassName={defaults.avgWeightPerUnitKg != null ? "text-primary" : "text-warning-foreground"}
-          saving={pendingField === "avgWeightPerUnitKg"}
+          saving={pendingField === "avgWeightPerUnitKg" || pendingField === "reset"}
           onCommit={(v) => commit("avgWeightPerUnitKg", v)}
         />
         <Slider
@@ -87,7 +110,7 @@ export function RfxCostAssumptionDefaults({
             defaults.referenceInvoiceValueInr != null ? "RFx-wide default" : "not set — invoice-value charges stay excluded"
           }
           sourceClassName={defaults.referenceInvoiceValueInr != null ? "text-primary" : "text-warning-foreground"}
-          saving={pendingField === "referenceInvoiceValueInr"}
+          saving={pendingField === "referenceInvoiceValueInr" || pendingField === "reset"}
           onCommit={(v) => commit("referenceInvoiceValueInr", v)}
         />
       </div>

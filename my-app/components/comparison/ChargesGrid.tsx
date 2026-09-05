@@ -166,6 +166,8 @@ export function ChargesGrid({
   const [sortKey, setSortKey] = useState<"lane" | string>("lane");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [scorecardOpen, setScorecardOpen] = useState(false);
+  const assumptionsUnset =
+    rfxCostAssumptionDefaults.avgWeightPerUnitKg == null || rfxCostAssumptionDefaults.referenceInvoiceValueInr == null;
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
 
   function openLaneDetail(laneId: string) {
@@ -217,9 +219,14 @@ export function ChargesGrid({
                 <path d="M4 3L8 6L4 9" stroke="var(--color-muted-foreground)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
               Vendor scorecard
+              {!scorecardOpen && assumptionsUnset && (
+                <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[10px] font-semibold text-warning-foreground">
+                  cost assumptions not set
+                </span>
+              )}
             </span>
             <span className="text-[11.5px] font-medium text-muted-foreground">
-              {scorecardOpen ? "Hide" : "Show"} overall / rate / questionnaire / terms scores
+              {scorecardOpen ? "Hide" : "Show"} scores &amp; cost assumptions
             </span>
           </button>
           {scorecardOpen && (
