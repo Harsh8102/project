@@ -25,12 +25,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { LaneSummary, VendorSummary, UnsolicitedLane } from "@/lib/db/queries/getComparisonData";
+import type { LaneSummary, VendorSummary, UnsolicitedLane, RfxCostAssumptionDefaults as RfxCostAssumptionDefaultsValue } from "@/lib/db/queries/getComparisonData";
 import type { LandedCostResult } from "@/lib/scoring/computeLandedCost";
 import type { VendorScoreResult } from "@/lib/scoring/computeScores";
 import type { ResolvedCostAssumptions } from "@/lib/scoring/costAssumptions";
 import { formatInr } from "./format";
 import { VendorScorecardStrip } from "./VendorScorecardStrip";
+import { RfxCostAssumptionDefaults } from "./RfxCostAssumptionDefaults";
 import { LaneDetailView } from "./LaneDetailView";
 
 type LandedCostGridPlain = Record<string, Record<string, LandedCostResult>>;
@@ -142,17 +143,21 @@ function toCsv(lanes: LaneSummary[], vendors: VendorSummary[], grid: LandedCostG
 }
 
 export function ChargesGrid({
+  rfxId,
   lanes,
   vendors,
   landedCosts,
   costAssumptionsByLaneId,
+  rfxCostAssumptionDefaults,
   unsolicitedLanes,
   vendorScores,
 }: {
+  rfxId: string;
   lanes: LaneSummary[];
   vendors: VendorSummary[];
   landedCosts: LandedCostGridPlain;
   costAssumptionsByLaneId: Record<string, ResolvedCostAssumptions>;
+  rfxCostAssumptionDefaults: RfxCostAssumptionDefaultsValue;
   unsolicitedLanes: UnsolicitedLane[];
   vendorScores: Record<string, VendorScoreResult>;
 }) {
@@ -217,7 +222,12 @@ export function ChargesGrid({
               {scorecardOpen ? "Hide" : "Show"} overall / rate / questionnaire / terms scores
             </span>
           </button>
-          {scorecardOpen && <VendorScorecardStrip vendors={vendors} scores={vendorScores} />}
+          {scorecardOpen && (
+            <>
+              <VendorScorecardStrip vendors={vendors} scores={vendorScores} />
+              <RfxCostAssumptionDefaults rfxId={rfxId} defaults={rfxCostAssumptionDefaults} />
+            </>
+          )}
         </div>
       )}
 

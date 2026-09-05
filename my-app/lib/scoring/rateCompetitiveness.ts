@@ -35,22 +35,22 @@ export function computeRateCompetitiveness(grid: LandedCostGrid): Map<string, nu
   for (const vendorId of vendorIds) perVendorLaneScores.set(vendorId, []);
 
   for (const laneId of laneIds) {
-    // Usable = at least one charge component resolved (totalInr !== null).
-    // Deliberately NOT restricted to fully-resolved (non-partial) totals:
-    // in the real dataset, charges like per-unit loading and FOV/liability
-    // (% of invoice value) are excluded from nearly every vendor's total
-    // (see computeLandedCost.ts) because there's no reliable unit count or
-    // invoice value to resolve them with — requiring a fully complete total
-    // would leave almost no vendor ever comparable, going dark on ranking
-    // for the whole build rather than giving a slightly incomplete but
-    // consistent signal. The `isPartial` flag stays visible on the totals
-    // themselves (grid badge, review queue) so the buyer can judge how much
-    // to trust a given comparison — this only affects whether a lane is
-    // used for the automated ranking at all.
+    // Usable = status === "resolved" — every charge component the vendor
+    // quoted on this lane resolved to a real number, none excluded. A
+    // "partial" total (e.g. missing per-unit loading or FOV/liability
+    // because no unit-count/invoice-value assumption is set) is NOT usable
+    // here: comparing a partial sum against another vendor's complete total
+    // isn't apples-to-apples — it structurally favors whoever has more
+    // missing charges, since exclusions only ever subtract from a total,
+    // never add. Requiring full resolution means a lane goes dark on
+    // ranking until the buyer sets the assumption(s) it needs (RFx-wide
+    // default or a per-lane override — see costAssumptions.ts) rather than
+    // silently scoring on an incomplete number. Matches the same
+    // fully-resolved-only rule already required for rank_vendor_lanes_by_cost.
     const usable: { vendorId: string; total: number }[] = [];
     for (const vendorId of vendorIds) {
       const result = grid.get(vendorId)?.get(laneId);
-      if (result && result.totalInr !== null) {
+      if (result && result.status === "resolved" && result.totalInr !== null) {
         usable.push({ vendorId, total: result.totalInr });
       }
     }

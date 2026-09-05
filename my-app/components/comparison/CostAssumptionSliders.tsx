@@ -20,6 +20,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { ResolvedCostAssumptions, AssumptionSource } from "@/lib/scoring/costAssumptions";
+import { Slider } from "./AssumptionSlider";
 
 type AssumptionField = "referenceWeightKg" | "avgWeightPerUnitKg" | "referenceInvoiceValueInr";
 
@@ -34,76 +35,6 @@ function sourceLabel(source: AssumptionSource): { text: string; className: strin
     case "unset":
       return { text: "not set — related charges stay excluded", className: "text-muted-foreground" };
   }
-}
-
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  unit,
-  source,
-  saving,
-  onCommit,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  unit: string;
-  source: AssumptionSource;
-  saving: boolean;
-  onCommit: (value: number) => void;
-}) {
-  const [local, setLocal] = useState(value);
-  // Adjusted during render, not a useEffect (the React-recommended pattern
-  // for "sync local state to a prop" — avoids an extra render pass): once
-  // a save settles, the fresh prop value replaces our local echo, so the
-  // slider stays correct even if the resolved value came from somewhere
-  // else (another tab, or the RFx default changing) while frozen at the
-  // just-committed value throughout the "saving" window in between.
-  const [syncedValue, setSyncedValue] = useState(value);
-  if (!saving && value !== syncedValue) {
-    setSyncedValue(value);
-    setLocal(value);
-  }
-  const src = sourceLabel(source);
-
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold">{label}</span>
-        <span className="font-mono text-[11px] font-bold tabular-nums">
-          {local.toLocaleString("en-IN")} {unit}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={local}
-        disabled={saving}
-        onChange={(e) => setLocal(Number(e.target.value))}
-        onMouseUp={() => onCommit(local)}
-        onTouchEnd={() => onCommit(local)}
-        onKeyUp={() => onCommit(local)}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-wait disabled:opacity-60"
-      />
-      {saving ? (
-        <span className="flex items-center gap-1 text-[9.5px] font-semibold text-primary">
-          <svg width="8" height="8" viewBox="0 0 8 8" className="animate-spin">
-            <circle cx="4" cy="4" r="3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="6 3" />
-          </svg>
-          saving — updating everywhere this lane appears…
-        </span>
-      ) : (
-        <span className={`text-[9.5px] font-medium ${src.className}`}>{src.text}</span>
-      )}
-    </div>
-  );
 }
 
 /** "500-1000 kg" -> {low: 500, high: 1000}. Falls back to a wide guess if unparseable. */
@@ -166,7 +97,8 @@ export function CostAssumptionSliders({
           max={Math.max(weightMax, weightMin + 1)}
           step={10}
           unit="kg"
-          source={assumptions.referenceWeightKg.source}
+          sourceText={sourceLabel(assumptions.referenceWeightKg.source).text}
+          sourceClassName={sourceLabel(assumptions.referenceWeightKg.source).className}
           saving={pending?.field === "referenceWeightKg"}
           onCommit={(v) => commitLaneOverride("referenceWeightKg", v)}
         />
@@ -179,7 +111,8 @@ export function CostAssumptionSliders({
           max={50}
           step={0.5}
           unit="kg/unit"
-          source={assumptions.avgWeightPerUnitKg.source}
+          sourceText={sourceLabel(assumptions.avgWeightPerUnitKg.source).text}
+          sourceClassName={sourceLabel(assumptions.avgWeightPerUnitKg.source).className}
           saving={pending?.field === "avgWeightPerUnitKg"}
           onCommit={(v) => commitLaneOverride("avgWeightPerUnitKg", v)}
         />
@@ -192,7 +125,8 @@ export function CostAssumptionSliders({
           max={500000}
           step={5000}
           unit="₹"
-          source={assumptions.referenceInvoiceValueInr.source}
+          sourceText={sourceLabel(assumptions.referenceInvoiceValueInr.source).text}
+          sourceClassName={sourceLabel(assumptions.referenceInvoiceValueInr.source).className}
           saving={pending?.field === "referenceInvoiceValueInr"}
           onCommit={(v) => commitLaneOverride("referenceInvoiceValueInr", v)}
         />

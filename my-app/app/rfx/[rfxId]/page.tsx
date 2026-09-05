@@ -41,10 +41,12 @@ export default async function RfxOverviewPage() {
       <RfxWorkspaceShell rfxId={rfx.id} chatHistory={chatHistory}>
         <ComparisonTabs
           overview={rfx}
+          rfxId={comparison.rfxId}
           lanes={comparison.lanes}
           vendors={comparison.vendors}
           landedCosts={nestedMapToRecord(comparison.landedCosts)}
           costAssumptionsByLaneId={mapToRecord(comparison.costAssumptionsByLaneId)}
+          rfxCostAssumptionDefaults={comparison.rfxCostAssumptionDefaults}
           unsolicitedLanes={comparison.unsolicitedLanes}
           questionnaireScores={mapToRecord(comparison.questionnaireScores)}
           termsScores={mapToRecord(comparison.termsScores)}

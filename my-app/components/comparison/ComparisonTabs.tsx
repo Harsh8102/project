@@ -22,6 +22,7 @@ import type { RfxOverview, SubmissionSummary } from "@/lib/db/queries/getRfxOver
 import type {
   DecisionSummaryRecord,
   LaneSummary,
+  RfxCostAssumptionDefaults,
   UnsolicitedLane,
   VendorSummary,
 } from "@/lib/db/queries/getComparisonData";
@@ -76,10 +77,12 @@ function SubmissionCell({ submission }: { submission: SubmissionSummary }) {
 
 export function ComparisonTabs({
   overview,
+  rfxId,
   lanes,
   vendors,
   landedCosts,
   costAssumptionsByLaneId,
+  rfxCostAssumptionDefaults,
   unsolicitedLanes,
   questionnaireScores,
   termsScores,
@@ -87,10 +90,12 @@ export function ComparisonTabs({
   decisions,
 }: {
   overview: RfxOverview;
+  rfxId: string;
   lanes: LaneSummary[];
   vendors: VendorSummary[];
   landedCosts: Record<string, Record<string, LandedCostResult>>;
   costAssumptionsByLaneId: Record<string, ResolvedCostAssumptions>;
+  rfxCostAssumptionDefaults: RfxCostAssumptionDefaults;
   unsolicitedLanes: UnsolicitedLane[];
   questionnaireScores: Record<string, SectionScore | null>;
   termsScores: Record<string, SectionScore | null>;
@@ -176,10 +181,12 @@ export function ComparisonTabs({
 
       <TabsContent value="charges" className="min-h-0 flex-1 overflow-hidden pt-4">
         <ChargesGrid
+          rfxId={rfxId}
           lanes={lanes}
           vendors={vendors}
           landedCosts={landedCosts}
           costAssumptionsByLaneId={costAssumptionsByLaneId}
+          rfxCostAssumptionDefaults={rfxCostAssumptionDefaults}
           unsolicitedLanes={unsolicitedLanes}
           vendorScores={vendorScores}
         />

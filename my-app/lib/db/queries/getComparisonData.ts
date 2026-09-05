@@ -83,12 +83,15 @@ export type TimeSavedStats = {
 
 export type DecisionSummaryRecord = { vendorId: string; laneId: string | null; awardedAt: string };
 
+export type RfxCostAssumptionDefaults = { avgWeightPerUnitKg: number | null; referenceInvoiceValueInr: number | null };
+
 export type ComparisonData = {
   rfxId: string;
   lanes: LaneSummary[];
   vendors: VendorSummary[];
   landedCosts: LandedCostGrid; // vendorId -> laneId -> LandedCostResult
   costAssumptionsByLaneId: Map<string, ResolvedCostAssumptions>;
+  rfxCostAssumptionDefaults: RfxCostAssumptionDefaults;
   unsolicitedLanes: UnsolicitedLane[];
   questionnaireScores: Map<string, ReturnType<typeof computeVendorScore>["questionnaire"]>;
   termsScores: Map<string, ReturnType<typeof computeVendorScore>["terms"]>;
@@ -273,6 +276,10 @@ export async function getComparisonData(rfxId: string): Promise<ComparisonData> 
     vendors,
     landedCosts,
     costAssumptionsByLaneId,
+    rfxCostAssumptionDefaults: {
+      avgWeightPerUnitKg: rfx.costAssumptionDefaults?.avgWeightPerUnitKg ?? null,
+      referenceInvoiceValueInr: rfx.costAssumptionDefaults?.referenceInvoiceValueInr ?? null,
+    },
     unsolicitedLanes,
     questionnaireScores,
     termsScores,
