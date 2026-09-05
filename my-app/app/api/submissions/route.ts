@@ -69,5 +69,6 @@ export async function POST(req: Request) {
     id: String(submission._id),
     status: submission.status,
     formatViolation: submission.formatViolation,
+    blobUrl: submission.blobUrl,
   });
 }

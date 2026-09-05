@@ -15,11 +15,27 @@ import type { SubmissionSection } from "@/lib/db/models/VendorSubmission";
 import type { RfxOverview, SubmissionSummary } from "@/lib/db/queries/getRfxOverview";
 import { useToastStack, ToastStack } from "@/components/ui/toast-stack";
 import { geminiKey } from "@/lib/client/apiKeyStorage";
+import { DocumentPreviewDialog, type PreviewTarget } from "./DocumentPreviewDialog";
 
 const SUBMISSION_SECTIONS: SubmissionSection[] = ["rates", "questionnaire", "terms"];
 
 function fileHref(blobUrl: string) {
   return `/api/files?url=${encodeURIComponent(blobUrl)}`;
+}
+
+// Mirrors app/api/submissions/route.ts's own detectFileType() so the
+// optimistic local state (set immediately on upload, before the page ever
+// refreshes) matches what the server will confirm — otherwise a freshly
+// uploaded image/PDF would report a raw extension ("jpg") instead of the
+// normalized type ("image") the preview dialog and status UI key off of.
+function normalizeFileType(fileName: string): string {
+  const ext = fileName.toLowerCase().split(".").pop() ?? "";
+  if (ext === "xlsx" || ext === "xls") return "xlsx";
+  if (ext === "pdf") return "pdf";
+  if (ext === "docx" || ext === "doc") return "docx";
+  if (ext === "txt") return "text";
+  if (["jpg", "jpeg", "png", "webp"].includes(ext)) return "image";
+  return "text";
 }
 
 const SECTION_LABELS: Record<SubmissionSection, string> = {
@@ -59,6 +75,7 @@ export function UploadTab({ overview }: { overview: RfxOverview }) {
   const [processingAll, setProcessingAll] = useState(false);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const { toasts, push: pushToast, dismiss: dismissToast } = useToastStack();
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
 
   const pendingCount = Object.values(submissions)
     .flatMap((s) => Object.values(s))
@@ -83,8 +100,8 @@ export function UploadTab({ overview }: { overview: RfxOverview }) {
               id: data.id,
               section,
               fileName: file.name,
-              fileType: file.name.split(".").pop() ?? "",
-              blobUrl: "",
+              fileType: normalizeFileType(file.name),
+              blobUrl: data.blobUrl,
               status: "uploaded",
               formatViolation: data.formatViolation,
             },
@@ -290,12 +307,21 @@ export function UploadTab({ overview }: { overview: RfxOverview }) {
                           {sub.status === "uploaded" && "Queued, not yet processed"}
                         </div>
                       )}
-                      <button
-                        onClick={() => fileInputRefs.current[key]?.click()}
-                        className="self-start text-[10.5px] font-semibold text-primary"
-                      >
-                        Replace file
-                      </button>
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          onClick={() => sub.blobUrl && setPreviewTarget({ submissionId: sub.id, blobUrl: sub.blobUrl, fileName: sub.fileName, fileType: sub.fileType })}
+                          disabled={!sub.blobUrl}
+                          className="self-start text-[10.5px] font-semibold text-primary disabled:opacity-40"
+                        >
+                          Preview
+                        </button>
+                        <button
+                          onClick={() => fileInputRefs.current[key]?.click()}
+                          className="self-start text-[10.5px] font-semibold text-primary"
+                        >
+                          Replace file
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -304,6 +330,8 @@ export function UploadTab({ overview }: { overview: RfxOverview }) {
           </Fragment>
         ))}
       </div>
+
+      <DocumentPreviewDialog target={previewTarget} onClose={() => setPreviewTarget(null)} />
     </div>
   );
 }
